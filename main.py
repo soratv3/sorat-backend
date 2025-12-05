@@ -1,18 +1,39 @@
 from flask import Flask, request, jsonify
+import hmac, hashlib, base64, json, os
 
 app = Flask(__name__)
+
+# Carrega o mapa de clientes
+hmacClientMap = json.loads(os.environ.get("GATEWAY_HMAC_CLIENT_MAP", "{}"))
+
+def verify_hmac(body_raw, signature, client_id):
+    if client_id not in hmacClientMap:
+        return False
+
+    key = base64.b64decode(hmacClientMap[client_id])
+    digest = hmac.new(key, body_raw, hashlib.sha256).digest()
+    expected = base64.b64encode(digest).decode()
+
+    return hmac.compare_digest(expected, signature)
+
+@app.route("/gateway", methods=["POST"])
+def gateway():
+    body_raw = request.data
+    body_json = request.get_json() or {}
+
+    client_id = request.headers.get("X-Client-Id", "")
+    signature = request.headers.get("X-Signature", "")
+
+    if not client_id or not signature:
+        return jsonify({"error": "missing headers"}), 400
+
+    ok = verify_hmac(body_raw, signature, client_id)
+
+    if not ok:
+        return jsonify({"error": "invalid signature"}), 401
+
+    return jsonify({"status": "ok", "received": body_json}), 200
 
 @app.route("/healthz")
 def healthz():
     return "ok", 200
-
-@app.route("/gateway", methods=["POST"])
-def gateway():
-    body = request.json or {}
-    return jsonify({
-        "status": "received",
-        "body": body
-    }), 200
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
